@@ -256,7 +256,7 @@ async function handleTelegramWebhook(request, env) {
       }
 
       if (text.startsWith("/start") || text.startsWith("/menu")) {
-        await sendTeleMessage(teleConfig.token, chatId, "⚡ <b>Selamat datang di Worker Manager Bot!</b>\n\nSilakan pilih menu di bawah ini:", getTeleMainMenu());
+        await sendTeleMessage(teleConfig.token, chatId, "⚡ <b>Selamat datang di Pages Manager Bot!</b>\n\nSilakan pilih menu di bawah ini:", getTeleMainMenu());
       } else if (text.startsWith("/add ")) {
         const rawUrl = text.replace("/add ", "").trim();
         const clean = cleanUrlInput(rawUrl);
@@ -463,7 +463,7 @@ function renderHTML(isSetup = false) {
       try {
         loadTeleConfig();
         const res = await fetch('/api/cf-accounts');
-        if (res.status === 401) return window.location.href = '/';
+        if (res.status === 401) return window.location.href = '/ui';
         savedAccounts = await res.json();
 
         if (Array.isArray(savedAccounts) && savedAccounts.length > 0) {
@@ -755,7 +755,7 @@ function renderHTML(isSetup = false) {
       const listEl = document.getElementById('urlList');
       try {
         const res = await fetch('/api/urls');
-        if (res.status === 401) return window.location.href = '/';
+        if (res.status === 401) return window.location.href = '/ui';
         const data = await res.json();
         listEl.innerHTML = '';
 
@@ -869,7 +869,6 @@ async function handleApi(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // Endpoint setup boleh diakses tanpa autentikasi awal jika password belum ada
   if (path === "/api/setup" && request.method === "POST") {
     if (!env || !env.URL_STORE) {
       return new Response("Error: KV URL_STORE belum terhubung di Pages Settings.", { status: 500 });
@@ -885,13 +884,13 @@ async function handleApi(request, env) {
         return new Response("OK", {
           status: 302,
           headers: {
-            "Location": "/",
+            "Location": "/ui",
             "Set-Cookie": `session_token=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`
           }
         });
       }
     }
-    return new Response("Setup complete", { status: 302, headers: { "Location": "/" } });
+    return new Response("Setup complete", { status: 302, headers: { "Location": "/ui" } });
   }
 
   if (path === "/api/check") {
@@ -1139,7 +1138,7 @@ async function handleApi(request, env) {
 // ---------------- HANDLER PROXY UTAMA ----------------
 async function handleProxy(request, env) {
   const WORKER_URLS = await getUrls(env);
-  if (WORKER_URLS.length === 0) return new Response("List kosong", { status: 503 });
+  if (WORKER_URLS.length === 0) return new Response("Belum ada target tunnel tersimpan di list.", { status: 503 });
 
   const shuffled = [...WORKER_URLS].sort(() => Math.random() - 0.5);
   const reqClone = request.clone();
@@ -1173,7 +1172,7 @@ async function handleProxy(request, env) {
       continue;
     }
   }
-  return new Response("Semua tepar", { status: 503 });
+  return new Response("Semua tunnel server tujuan tidak dapat dijangkau", { status: 503 });
 }
 
 // ---------------- PAGES ENTRY POINT ----------------
@@ -1183,7 +1182,7 @@ export async function onRequest(context) {
   try {
     const url = new URL(request.url);
 
-    // 1. Prioritaskan API dan Endpoint Setup
+    // 1. Prioritaskan API Backend
     if (url.pathname.startsWith("/api/")) {
       return await handleApi(request, env);
     }
@@ -1195,7 +1194,7 @@ export async function onRequest(context) {
     if (url.pathname === "/logout") {
       return new Response("Logged out", {
         status: 302,
-        headers: { "Location": "/", "Set-Cookie": "session_token=; Path=/; HttpOnly; Secure; Max-Age=0" }
+        headers: { "Location": "/ui", "Set-Cookie": "session_token=; Path=/; HttpOnly; Secure; Max-Age=0" }
       });
     }
 
@@ -1209,25 +1208,21 @@ export async function onRequest(context) {
         await setSessionToken(env, token);
         return new Response("OK", {
           status: 302,
-          headers: { "Location": "/", "Set-Cookie": `session_token=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800` }
+          headers: { "Location": "/ui", "Set-Cookie": `session_token=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800` }
         });
       }
       return new Response(renderLoginHTML("Password Salah!"), { headers: { "Content-Type": "text/html" } });
     }
 
-    const upgradeHeader = request.headers.get("Upgrade");
-    if (upgradeHeader && upgradeHeader.toLowerCase() === "websocket") {
-      return await handleProxy(request, env);
-    }
-
-    // 2. Routing Halaman UI Dashboard & Setup
-    if (url.pathname === "/" || url.pathname === "/ui" || url.pathname === "/admin") {
+    // 2. Khusus Dashboard UI & Setup Admin (hanya dibuka di /ui atau /admin)
+    if (url.pathname === "/ui" || url.pathname === "/admin") {
       const savedPassword = await getAdminPassword(env);
       if (!savedPassword) return new Response(renderHTML(true), { headers: { "Content-Type": "text/html" } });
       if (await isAuthenticated(request, env)) return new Response(renderHTML(false), { headers: { "Content-Type": "text/html" } });
       return new Response(renderLoginHTML(), { headers: { "Content-Type": "text/html" } });
     }
 
+    // 3. Semua request lainnya (termasuk halaman utama / dan WebSocket/VPN traffic) langsung diarahkan ke server tujuan
     return await handleProxy(request, env);
   } catch (err) {
     return new Response(`Pages Internal Error: ${err.message}`, { status: 500 });
