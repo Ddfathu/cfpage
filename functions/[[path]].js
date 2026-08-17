@@ -132,11 +132,7 @@ async function checkUrlStatus(url) {
 // --- BOT TELEGRAM HELPER & HANDLER ---
 async function sendTeleMessage(token, chatId, text, keyboard = null) {
   if (!token || !chatId) return { ok: false };
-  const payload = {
-    chat_id: chatId,
-    text: text,
-    parse_mode: "HTML"
-  };
+  const payload = { chat_id: chatId, text: text, parse_mode: "HTML" };
   if (keyboard) payload.reply_markup = keyboard;
 
   try {
@@ -153,12 +149,7 @@ async function sendTeleMessage(token, chatId, text, keyboard = null) {
 
 async function editTeleMessage(token, chatId, messageId, text, keyboard = null) {
   if (!token || !chatId) return;
-  const payload = {
-    chat_id: chatId,
-    message_id: messageId,
-    text: text,
-    parse_mode: "HTML"
-  };
+  const payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: "HTML" };
   if (keyboard) payload.reply_markup = keyboard;
 
   try {
@@ -346,7 +337,7 @@ function renderHTML(isSetup = false) {
 <html lang="id">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Worker Manager</title>
+  <title>Pages Manager</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { background: #0f172a; color: #f8fafc; padding: 20px; display: flex; justify-content: center; min-height: 100vh; }
@@ -381,7 +372,7 @@ function renderHTML(isSetup = false) {
 <body>
   <div class="container">
     <div class="header">
-      <h2>⚡ Worker Manager</h2>
+      <h2>⚡ Pages Manager</h2>
       <a href="/logout"><button class="btn-logout">Logout</button></a>
     </div>
 
@@ -849,7 +840,7 @@ function renderLoginHTML(error = '') {
 <html lang="id">
 <head>
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login Admin Worker</title>
+  <title>Login Admin Pages</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
     body { background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
@@ -875,12 +866,44 @@ function renderLoginHTML(error = '') {
 
 // ---------------- API HANDLER UTAMA ----------------
 async function handleApi(request, env) {
+  const url = new URL(request.url);
+  const path = url.pathname;
+
+  // Endpoint setup boleh diakses tanpa autentikasi awal jika password belum ada
+  if (path === "/api/setup" && request.method === "POST") {
+    if (!env || !env.URL_STORE) {
+      return new Response("Error: KV URL_STORE belum terhubung di Pages Settings.", { status: 500 });
+    }
+    const savedPassword = await getAdminPassword(env);
+    if (!savedPassword) {
+      const formData = await request.formData();
+      const newPassword = formData.get("password");
+      if (newPassword && newPassword.trim().length >= 4) {
+        await setAdminPassword(env, newPassword.trim());
+        const token = crypto.randomUUID();
+        await setSessionToken(env, token);
+        return new Response("OK", {
+          status: 302,
+          headers: {
+            "Location": "/",
+            "Set-Cookie": `session_token=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800`
+          }
+        });
+      }
+    }
+    return new Response("Setup complete", { status: 302, headers: { "Location": "/" } });
+  }
+
+  if (path === "/api/check") {
+    const targetUrl = url.searchParams.get("url");
+    if (!targetUrl) return new Response("URL required", { status: 400 });
+    const result = await checkUrlStatus(targetUrl);
+    return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
+  }
+
   if (!(await isAuthenticated(request, env))) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
   }
-
-  const url = new URL(request.url);
-  const path = url.pathname;
 
   if (path === "/api/urls") {
     if (request.method === "GET") return new Response(JSON.stringify(await getUrls(env)), { headers: { "Content-Type": "application/json" } });
@@ -1110,13 +1133,6 @@ async function handleApi(request, env) {
     }
   }
 
-  if (path === "/api/check") {
-    const targetUrl = url.searchParams.get("url");
-    if (!targetUrl) return new Response("URL required", { status: 400 });
-    const result = await checkUrlStatus(targetUrl);
-    return new Response(JSON.stringify(result), { headers: { "Content-Type": "application/json" } });
-  }
-
   return new Response("Not Found", { status: 404 });
 }
 
@@ -1160,12 +1176,17 @@ async function handleProxy(request, env) {
   return new Response("Semua tepar", { status: 503 });
 }
 
-// ---------------- PAGES FUNCTIONS ENTRY POINT ----------------
+// ---------------- PAGES ENTRY POINT ----------------
 export async function onRequest(context) {
   const { request, env } = context;
 
   try {
     const url = new URL(request.url);
+
+    // 1. Prioritaskan API dan Endpoint Setup
+    if (url.pathname.startsWith("/api/")) {
+      return await handleApi(request, env);
+    }
 
     if (url.pathname === "/telegram-webhook" && request.method === "POST") {
       return await handleTelegramWebhook(request, env);
@@ -1194,35 +1215,13 @@ export async function onRequest(context) {
       return new Response(renderLoginHTML("Password Salah!"), { headers: { "Content-Type": "text/html" } });
     }
 
-    if (url.pathname === "/api/setup" && request.method === "POST") {
-      const savedPassword = await getAdminPassword(env);
-      if (!savedPassword) {
-        const formData = await request.formData();
-        const newPassword = formData.get("password");
-        if (newPassword && newPassword.trim().length >= 4) {
-          await setAdminPassword(env, newPassword.trim());
-        }
-      }
-      return new Response("Setup complete", { status: 302, headers: { "Location": "/" } });
-    }
-
-    if (url.pathname.startsWith("/api/")) {
-      return await handleApi(request, env);
-    }
-
     const upgradeHeader = request.headers.get("Upgrade");
-    const acceptHeader = request.headers.get("Accept") || "";
-
     if (upgradeHeader && upgradeHeader.toLowerCase() === "websocket") {
       return await handleProxy(request, env);
     }
 
-    if (
-      url.pathname === "/" || 
-      url.pathname === "/ui" || 
-      url.pathname === "/admin" || 
-      acceptHeader.includes("text/html")
-    ) {
+    // 2. Routing Halaman UI Dashboard & Setup
+    if (url.pathname === "/" || url.pathname === "/ui" || url.pathname === "/admin") {
       const savedPassword = await getAdminPassword(env);
       if (!savedPassword) return new Response(renderHTML(true), { headers: { "Content-Type": "text/html" } });
       if (await isAuthenticated(request, env)) return new Response(renderHTML(false), { headers: { "Content-Type": "text/html" } });
